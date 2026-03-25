@@ -1,0 +1,406 @@
+import heapq
+from itertools import combinations
+from collections import deque
+
+# PROBLEM 1: Course Planning
+def min_failed_courses(n, f, s, d, c):
+    """
+    n: number of homeworks (1-indexed in problem, 0-indexed here)
+    f: daily capacity
+    s: list of start days (length n)
+    d: list of deadline days (length n)
+    c: list of course identifiers 1..5 (length n)
+    Returns: minimum number of courses failed
+    """
+    best_passed = 0
+
+    # Try all 2^5 = 32 subsets of courses {1,2,3,4,5}
+    all_courses = [1, 2, 3, 4, 5]
+    for size in range(6):
+        for subset in combinations(all_courses, size):
+            S = set(subset)
+
+            # Collect homeworks belonging to courses in S
+            H = [i for i in range(n) if c[i] in S]
+
+            if not H:
+                # No homeworks needed, subset is feasible
+                if len(S) > best_passed:
+                    best_passed = len(S)
+                continue
+
+            # Build sorted list of distinct event days
+            event_set = set()
+            for i in H:
+                event_set.add(s[i])
+                event_set.add(d[i])
+            events = sorted(event_set)
+
+            # Sort H by start time (for insertion tracking)
+            H_sorted = sorted(H, key=lambda i: s[i])
+
+            # EDF feasibility check
+            Q = []  # min-heap keyed by deadline
+            slots = 0
+            feasible = True
+            idx = 0  # pointer into H_sorted
+
+            for e_idx in range(len(events)):
+                t = events[e_idx]
+
+                # Accumulate capacity
+                if e_idx == 0:
+                    slots += f
+                else:
+                    slots += f * (events[e_idx] - events[e_idx - 1])
+
+                # Insert homeworks with s_i <= t
+                while idx < len(H_sorted) and s[H_sorted[idx]] <= t:
+                    hw = H_sorted[idx]
+                    heapq.heappush(Q, d[hw])
+                    idx += 1
+
+                # Complete homeworks with deadline <= t (greedy EDF)
+                while Q and Q[0] <= t:
+                    heapq.heappop(Q)
+                    slots -= 1
+                    if slots < 0:
+                        feasible = False
+                        break
+
+                if not feasible:
+                    break
+
+            if feasible and len(S) > best_passed:
+                best_passed = len(S)
+
+    return 5 - best_passed
+
+# Problem 2: Codex Algorithmus
+def count_texts(n, k):
+    """
+    n: length of text
+    k: minimum number of occurrences of "algorithm"
+    Returns: number of strings of length n with >= k occurrences
+    """
+    W = "algorithm"  # W[0..8], length 9
+
+    # dp[i][j][s] = number of strings of length i with min(j,k)
+    # occurrences and partial match state s
+    # Dimensions: (n+1) x (k+1) x 9
+    dp = [[[0] * 9 for _ in range(k + 1)] for _ in range(n + 1)]
+    dp[0][0][0] = 1
+
+    for i in range(n):
+        for j in range(k + 1):
+            for s in range(9):
+                if dp[i][j][s] == 0:
+                    continue
+
+                for c_ord in range(26):
+                    c = chr(ord('a') + c_ord)
+
+                    if c == W[s]:
+                        if s < 8:
+                            # Advance partial match
+                            dp[i + 1][j][s + 1] += dp[i][j][s]
+                        else:
+                            # Complete match: increment j (cap at k),
+                            # reset state to 0
+                            new_j = min(j + 1, k)
+                            dp[i + 1][new_j][0] += dp[i][j][s]
+                    else:
+                        # Mismatch: reset to 1 if c='a', else 0
+                        if c == 'a':
+                            new_s = 1
+                        else:
+                            new_s = 0
+                        dp[i + 1][j][new_s] += dp[i][j][s]
+
+    # Sum dp[n][k][s] for all s
+    return sum(dp[n][k][s] for s in range(9))
+
+# PROBLEM 3: Heist
+def bfs_max_flow(graph, source, sink, n_nodes):
+    """
+    Edmonds-Karp (BFS-based Ford-Fulkerson) max flow.
+    graph: adjacency list where graph[u] = list of [v, capacity, rev_index]
+    Returns: max flow value
+    """
+    def bfs(source, sink, parent):
+        visited = set([source])
+        queue = deque([source])
+        while queue:
+            u = queue.popleft()
+            for idx, (v, cap, _) in enumerate(graph[u]):
+                if v not in visited and cap > 0:
+                    visited.add(v)
+                    parent[v] = (u, idx)
+                    if v == sink:
+                        return True
+                    queue.append(v)
+        return False
+
+    total_flow = 0
+    while True:
+        parent = {}
+        if not bfs(source, sink, parent):
+            break
+
+        # Find bottleneck
+        path_flow = float('inf')
+        v = sink
+        while v != source:
+            u, idx = parent[v]
+            path_flow = min(path_flow, graph[u][idx][1])
+            v = u
+
+        # Update residual capacities
+        v = sink
+        while v != source:
+            u, idx = parent[v]
+            graph[u][idx][1] -= path_flow
+            rev_idx = graph[u][idx][2]
+            graph[v][rev_idx][1] += path_flow
+            v = u
+
+        total_flow += path_flow
+
+    return total_flow
+
+
+def add_edge(graph, u, v, cap):
+    """Add a directed edge u->v with capacity cap, and reverse edge."""
+    graph[u].append([v, cap, len(graph[v])])
+    graph[v].append([u, 0, len(graph[u]) - 1])
+
+
+def add_undirected_edge(graph, u, v, cap):
+    """Add undirected edge as two directed edges."""
+    graph[u].append([v, cap, len(graph[v])])
+    graph[v].append([u, cap, len(graph[u]) - 1])
+
+
+def heist(n, m, d, p, a, b, c):
+    """
+    n: number of connection points (1-indexed, alarm at n)
+    m: number of cables
+    d: time to sever one cable
+    p: list of booleans, p[i] = True if point i+1 is power source
+       (0-indexed, so p[0] = point 1)
+    a, b, c: cable endpoints and installation times (0-indexed arrays)
+    Returns: earliest time alarm can be disconnected
+    """
+    INF = float('inf')
+
+    # Collect critical times
+    times_set = {0}
+    for j in range(m):
+        times_set.add(c[j])
+        times_set.add(c[j] + d)
+    times = sorted(times_set)
+
+    last_mc = INF
+
+    for t in times:
+        # Build flow network
+        # Nodes: 0 = super-source, 1..n = connection points
+        # Sink = node n (the alarm)
+        n_nodes = n + 1
+        graph = [[] for _ in range(n_nodes)]
+
+        source = 0
+        sink = n  # alarm is point n, which is node n
+
+        # Add edges from super-source to power sources
+        for i in range(n):
+            if p[i]:  # point i+1 is power source
+                add_edge(graph, source, i + 1, INF)
+
+        # Add cable edges
+        for j in range(m):
+            if c[j] > t:
+                continue  # cable not yet installed
+
+            u = a[j]  # already 1-indexed
+            v = b[j]
+
+            if c[j] + d <= t:
+                cap = 1  # severable
+            else:
+                cap = INF  # not yet severable
+
+            add_undirected_edge(graph, u, v, cap)
+
+        mc = bfs_max_flow(graph, source, sink, n_nodes)
+        last_mc = mc
+
+        budget = t // d
+
+        if mc <= budget:
+            return max(t, mc * d)
+
+    return last_mc * d
+
+# PROBLEM 4: Gig Economy
+def gig_economy(n, r, u, s, d):
+    """
+    n: number of gigs
+    r: reward per gig
+    u: upgrade cost per level
+    s: list of start times (length n)
+    d: list of durations (length n)
+    Returns: maximum net profit
+    """
+    INF = float('inf')
+
+    # Sort gigs by start time
+    gigs = sorted(range(n), key=lambda i: s[i])
+    s_sorted = [s[i] for i in gigs]
+    d_sorted = [d[i] for i in gigs]
+
+    # Compute useful upgrade levels
+    levels_set = {0}
+
+    # Breakpoints: d_i - 1 (where gig i reaches min duration 1)
+    for i in range(n):
+        if d_sorted[i] > 1:
+            levels_set.add(d_sorted[i] - 1)
+
+    # Transition points: d_i - (s_j - s_i) for all pairs (i, j)
+    for i in range(n):
+        for j in range(n):
+            val = d_sorted[i] - (s_sorted[j] - s_sorted[i])
+            if val >= 0:
+                levels_set.add(val)
+
+    G = sorted(levels_set)
+    L = len(G)
+
+    # Map level value to index for quick lookup
+    level_idx = {g: idx for idx, g in enumerate(G)}
+
+    # DP table: dp[j][l] = earliest finish time after j gigs at level G[l]
+    dp = [[INF] * L for _ in range(n + 1)]
+    dp[0][0] = -INF
+
+    for i in range(n):
+        si = s_sorted[i]
+        di = d_sorted[i]
+
+        # Transition: try doing gig i (downward j-loop)
+        for j in range(min(i + 1, n), 0, -1):
+            for l in range(L):
+                if (j - 1) * r < G[l] * u:
+                    continue  # can't afford
+                if dp[j - 1][l] > si:
+                    continue  # not free in time
+                finish = si + max(1, di - G[l])
+                if finish < dp[j][l]:
+                    dp[j][l] = finish
+
+        # Propagation: upgrade levels
+        for j in range(i + 2):  # 0 to i+1 (after doing gig i, max j = i+1)
+            if j > n:
+                break
+            for l in range(L - 1):
+                if j * r >= G[l + 1] * u:
+                    if dp[j][l] < dp[j][l + 1]:
+                        dp[j][l + 1] = dp[j][l]
+
+    # Compute maximum profit
+    best = 0
+    for j in range(n + 1):
+        for l in range(L):
+            if dp[j][l] < INF:
+                profit = j * r - G[l] * u
+                if profit > best:
+                    best = profit
+
+    return best
+
+
+if __name__ == "__main__":
+    print("PROBLEM 1: Course Planning")
+
+    result = min_failed_courses(
+        n=7,
+        f=2,
+        s=[10, 12, 10, 12, 11, 11, 11],
+        d=[11, 12, 11, 12, 12, 12, 12],
+        c=[1, 1, 2, 2, 3, 3, 4]
+    )
+    print(f"f=2: {result} (expected 1)")
+
+    # f=1 case
+    result = min_failed_courses(
+        n=7,
+        f=1,
+        s=[10, 12, 10, 12, 11, 11, 11],
+        d=[11, 12, 11, 12, 12, 12, 12],
+        c=[1, 1, 2, 2, 3, 3, 4]
+    )
+    print(f"f=1: {result} (expected 2)")
+
+    # f=3 case
+    result = min_failed_courses(
+        n=7,
+        f=3,
+        s=[10, 12, 10, 12, 11, 11, 11],
+        d=[11, 12, 11, 12, 12, 12, 12],
+        c=[1, 1, 2, 2, 3, 3, 4]
+    )
+    print(f"f=3: {result} (expected 0)")
+
+    print()
+    print("PROBLEM 2: Codex Algorithmus")
+
+    # n=9, k=1: only "algorithm" itself
+    result = count_texts(9, 1)
+    print(f"n=9,  k=1: {result} (expected 1)")
+
+    # n=10, k=1: "algorithm?" or "?algorithm" = 2*26 = 52
+    result = count_texts(10, 1)
+    print(f"n=10, k=1: {result} (expected 52)")
+
+    # n=18, k=1: 10*26^9 - 1
+    result = count_texts(18, 1)
+    expected = 10 * (26 ** 9) - 1
+    print(f"n=18, k=1: {result} (expected {expected})")
+
+    # n=9, k=2: only 1 occurrence possible, so 0 texts with >= 2
+    result = count_texts(9, 2)
+    print(f"n=9,  k=2: {result} (expected 0)")
+
+    print()
+    print("=" * 60)
+    print("PROBLEM 3: Heist")
+    print("=" * 60)
+
+    result = heist(
+        n=4,
+        m=4,
+        d=20,
+        p=[True, False, True, False],  # points 1,3 are power sources
+        a=[1, 3, 2, 2],
+        b=[2, 4, 3, 4],
+        c=[0, 30, 5, 0]
+    )
+    print(f"Result: {result} (expected 20)")
+
+    print()
+    print("PROBLEM 4: Gig Economy")
+
+    # Example from problem statement
+    result = gig_economy(
+        n=5,
+        r=10,
+        u=4,
+        s=[1, 4, 5, 8, 9],
+        d=[4, 6, 5, 4, 2]
+    )
+    print(f"Result: {result} (expected 28)")
+
+    # No upgrades, do 2 gigs (1 and 5): profit = 20
+    # Verify this is less than 28
+    print(f"(No-upgrade baseline would be 20, algorithm found {result})")
